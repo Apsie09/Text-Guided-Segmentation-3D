@@ -12,3 +12,4 @@ __pycache__/
 .vscode/
 .codeboarding/
 lightweight_multimodal_robotic_perception_project.md
+.env

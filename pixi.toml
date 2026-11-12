@@ -42,6 +42,13 @@ check-gpu = "python -c \"import torch; print(torch.__version__, torch.version.cu
 check-env = "python -c \"import torch, transformers, open3d, pycocotools, cv2; print('torch', torch.__version__, '| transformers', transformers.__version__, '| open3d', open3d.__version__, '| cv2', cv2.__version__)\""
 test = "pytest -q tests"
 inspect-data = "python scripts/inspect_dataset.py"
+cache-features = "python scripts/cache_features.py"
+train = "python -m src.train"
+evaluate = "python -m src.evaluate"
+clipseg = "python -m src.clipseg_baseline"
+experiments = "python scripts/run_experiments.py"
+viz3d = "python -m src.visualize_3d"
+overfit = "python -m src.train --overfit 16 --epochs 150 --batch-size 16 --lr 1e-3"
 download-models = "python scripts/download_models.py"
 smoke-test = { cmd = "python scripts/smoke_test.py", depends-on = [
     "download-models",

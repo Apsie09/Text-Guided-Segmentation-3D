@@ -36,12 +36,14 @@ Only the decoder is trained (target ~0.5–3M parameters). CLIP stays frozen.
 Back-projection of masked pixels with the pinhole model:
 
 ```
-X = (u - cx) * Z / fx      Y = (v - cy) * Z / fy      Z = depth(u, v)
+Z = depth(u, v) / 1000      X = (u - cx) * Z / fx      Y = (v - cy) * Z / fy
 P_world = T_world_camera @ [X, Y, Z, 1]^T
 ```
 
-Rendered with Open3D: foreground points in red, background points in their RGB colors, with
-the camera frame shown. Single-view geometry only, so hidden surfaces are not reconstructed.
+Back-projection, the world transform and rendering use Open3D. `tests/test_projection.py`
+checks that Open3D follows exactly these formulas and conventions. Foreground points are drawn in
+red, the rest in their RGB colours, together with camera frustums and the target's centroid and
+bounding box. Full derivation, checks and limitations: [`report/graphics.md`](report/graphics.md).
 
 ## Setup
 
@@ -54,15 +56,25 @@ pixi run check-gpu          # confirm CUDA is visible
 pixi run smoke-test         # download CLIP/CLIPSeg, check feature shapes and VRAM
 pixi run inspect-data       # dataset stats, split check, 20 overlays -> outputs/inspect/
 pixi run test               # unit tests
+pixi run cache-features     # frozen CLIP features for all images/sentences -> data/cache/
+pixi run experiments        # train all variants x 3 seeds, compare on val (+ CLIPSeg reference)
+pixi run viz3d --text "white armchair" --frames 0 1 2 3 4 --show   # 3D demo on Redwood RGB-D
 ```
 
 ## Layout
 
 ```
 src/data/refcoco_m.py       dataset loading, RLE decoding, image-grouped split, torch Dataset
+src/features.py             frozen CLIP wrapper and GPU feature cache
+src/models/decoder.py       decoder with fusion = none | film | concat
+src/train.py, evaluate.py   training (early stopping on val mIoU) and comparison of runs
+src/clipseg_baseline.py     off-the-shelf CLIPSeg reference
+src/predict.py              inference on any image + sentence
+src/visualize_3d.py         RGB-D back-projection and Open3D rendering
 scripts/                    download, smoke test, dataset inspection
 splits/                     fixed train/val/test image ids (committed)
-tests/                      split and mask-alignment tests
+tests/                      split, mask-alignment, model-shape and projection tests
+report/                     results tables, figures and the 3D module write-up
 outputs/                    generated figures and checkpoints (not committed)
 ```
 
