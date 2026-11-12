@@ -1,0 +1,48 @@
+[workspace]
+name = "text-guided-segmentation-3d"
+version = "0.1.0"
+description = "Lightweight language-conditioned segmentation on frozen CLIP features, with RGB-D back-projection"
+channels = ["conda-forge"]
+# cuda = "12": the machine has a CUDA 12 capable driver (580.x), so the solver
+# picks CUDA builds of PyTorch. glibc = "2.39": matches Ubuntu 24.04's glibc,
+# needed for the Open3D 0.19 PyPI wheels (manylinux_2_31+).
+platforms = [
+    { name = "linux-64-cuda", platform = "linux-64", cuda = "12", glibc = "2.39" },
+]
+
+[dependencies]
+python = "3.12.*"
+pytorch-gpu = ">=2.5"
+torchvision = "*"
+transformers = ">=4.45"
+huggingface_hub = "*"
+safetensors = "*"
+datasets = "*"
+pycocotools = "*"
+numpy = "<2.3"
+opencv = "*"
+pillow = "*"
+matplotlib = "*"
+pyyaml = "*"
+tqdm = "*"
+scipy = "*"
+pytest = "*"
+ipykernel = "*"
+
+# Open3D is installed from PyPI: its wheels are the most reliable source.
+[pypi-dependencies]
+open3d = ">=0.18"
+
+# Lets scripts and tests import the project package as `src.*`.
+[activation.env]
+PYTHONPATH = "$PIXI_PROJECT_ROOT"
+
+[tasks]
+check-gpu = "python -c \"import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.get_device_name(0))\""
+check-env = "python -c \"import torch, transformers, open3d, pycocotools, cv2; print('torch', torch.__version__, '| transformers', transformers.__version__, '| open3d', open3d.__version__, '| cv2', cv2.__version__)\""
+test = "pytest -q tests"
+inspect-data = "python scripts/inspect_dataset.py"
+download-models = "python scripts/download_models.py"
+smoke-test = { cmd = "python scripts/smoke_test.py", depends-on = [
+    "download-models",
+] }
