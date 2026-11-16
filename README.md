@@ -7,9 +7,6 @@ Given an RGB image and a sentence such as *"woman in the middle"*, the model pre
 mask of the referred object. With aligned depth and camera intrinsics, the mask is lifted to 3D,
 placed in a world frame and rendered as a highlighted point cloud.
 
-> Computer Graphics course project. The numbers below come from a custom split of RefCOCO-M and
-> are **internal course experiments, not official benchmark results**.
-
 ![Same image, two sentences](report/figures/gallery_language.png)
 
 ## Scope
