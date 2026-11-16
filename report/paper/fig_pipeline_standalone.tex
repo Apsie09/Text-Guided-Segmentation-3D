@@ -1,0 +1,12 @@
+% Renders Figure 1 on its own (for the README): pdflatex fig_pipeline_standalone && pdftoppm -r 200 -png -singlefile fig_pipeline_standalone.pdf ../figures/pipeline
+\documentclass[border=6pt]{standalone}
+\usepackage[T1]{fontenc}
+\usepackage{newtxtext,newtxmath}
+\usepackage{amsmath,graphicx,xcolor,tikz,fontawesome5}
+\usepackage[autostyle]{csquotes}
+\usetikzlibrary{positioning,arrows.meta,fit,calc}
+\graphicspath{{figures/}}
+\newcommand{\Ffeat}{\mathbf{F}}
+\begin{document}
+\input{fig_pipeline}
+\end{document}

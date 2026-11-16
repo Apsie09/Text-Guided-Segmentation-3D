@@ -23,11 +23,13 @@ placed in a world frame and rendered as a highlighted point cloud.
 
 ## Model
 
-```
-image ─ frozen CLIP ViT-B/16 ─ patch tokens (4 layers × 14×14×768) ─ LayerNorm + Linear → 128 ch ─┐
-text  ─ frozen CLIP text encoder ─ 512-d embedding ─ MLP → FiLM (γ, β) ──────────────────────────→ (1+γ)·F + β
-                                                     conv 14² → FiLM → up 28² → conv → up 56² → 1×1 → 224² logits
-```
+![Method overview](report/figures/pipeline.png)
+
+Frozen CLIP encoders (❄) turn the image into patch tokens from 4 layers and the sentence into a
+512-d embedding. The trainable decoder (🔥, 1.05 M parameters) is conditioned on the sentence through
+FiLM, a per-channel scale and shift `(1 + γ) · F + β` at two stages, and upsamples 14² → 224².
+With depth, intrinsics `K` and camera pose `T_wc`, the mask is lifted to a 3D point cloud in the
+world frame.
 
 | ID | Text fusion | Trainable params | Notes |
 |---|---|---|---|
