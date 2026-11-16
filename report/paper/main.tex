@@ -1,0 +1,475 @@
+\documentclass[conference,a4paper]{IEEEtran}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{newtxtext,newtxmath}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,calc}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage[autostyle]{csquotes}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage[capitalise,nameinlink]{cleveref}
+\crefname{equation}{Eq.}{Eqs.}
+\Crefname{equation}{Eq.}{Eqs.}
+
+\graphicspath{{figures/}{../figures/}}
+\renewcommand{\IEEEkeywordsname}{Keywords}
+
+\newcommand{\Ffeat}{\mathbf{F}}
+\newcommand{\film}{\mathrm{FiLM}}
+
+\begin{document}
+
+\title{Text-Guided Object Segmentation on Frozen\\CLIP Features with RGB-D Lifting to 3D}
+
+% TODO: check faculty
+\author{\IEEEauthorblockN{Asen Popov}
+\IEEEauthorblockA{\textit{Faculty of Computer Systems and Technologies}\\
+\textit{Technical University of Sofia}\\
+Sofia, Bulgaria\\
+asepopov@tu-sofia.bg}}
+
+\maketitle
+
+\begin{abstract}
+A robot that is told \enquote{pick up the cup on the left} must first find the pixels and then the
+3D points that the sentence refers to. This paper examines how far a small trainable decoder on top
+of a \emph{frozen} CLIP encoder can go on this referring-segmentation problem. The predicted masks are
+lifted into a world-frame point cloud with a calibrated RGB-D camera. With about one million trainable parameters,
+text conditioning via FiLM raises test mIoU from 0.281 (image-only) to 0.393, on par with the
+pretrained CLIPSeg model (0.385). The two models have complementary strengths: the proposed decoder
+on spatial references, CLIPSeg on object names and attributes.
+\end{abstract}
+
+\begin{IEEEkeywords}
+CLIP, FiLM, point clouds, referring image segmentation, RGB-D back-projection
+\end{IEEEkeywords}
+
+% ---------------------------------------------------------------------------
+\section{Introduction}
+\label{sec:introduction}
+
+Robots in homes and warehouses are increasingly instructed in natural language. Before a
+manipulator can act on \enquote{the white armchair} or \enquote{the woman in the middle}, the
+perception system has to answer two geometric questions: \emph{which pixels} does the sentence refer
+to, and \emph{where in space} are those pixels? The first is the task of referring image segmentation
+\cite{hu2016segmentation}; the second is a classic computer graphics and vision problem of inverting
+the camera projection with measured depth \cite{hartley2004mvg}.
+
+Large vision-language models such as CLIP \cite{radford2021clip} have made the first question much
+more approachable: their image and text embeddings live in a shared space and transfer to many
+tasks without retraining. Fine-tuning them end to end, however, is expensive and easily overfits
+small datasets. This raises the question studied in this work:
+\begin{displayquote}
+Can a lightweight decoder, trained on frozen CLIP features from a small dataset, ground referring
+expressions well enough to localise the referred object in 3D?
+\end{displayquote}
+
+The contributions of this work are:
+\begin{itemize}
+\item a 1.05\,M-parameter decoder that fuses multi-layer CLIP patch tokens with the sentence
+  embedding through feature-wise linear modulation (FiLM) \cite{perez2018film};
+\item a controlled comparison, over three seeds and on a held-out test set, of image-only, FiLM and
+  concatenation fusion, of the loss function and of regularisation, including a horizontal-flip
+  augmentation that also swaps the words \enquote{left} and \enquote{right};
+\item a comparison against the pretrained CLIPSeg model \cite{luddecke2022clipseg}, broken down by
+  sentence type;
+\item a geometric module that back-projects the predicted mask from RGB-D frames into a common world
+  frame, with a multi-view consistency check of the result.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Vision-Language Models and Dense Prediction}
+
+CLIP \cite{radford2021clip} trains an image encoder, here a Vision Transformer (ViT)
+\cite{dosovitskiy2021vit}, and a text encoder contrastively on 400 million image-text pairs. Its
+global embeddings support zero-shot classification, but segmentation needs dense, per-pixel output.
+MaskCLIP \cite{zhou2022maskclip} showed that the ViT patch tokens already carry usable spatial
+information without any training, and LSeg \cite{li2022lseg} trained an image encoder to match
+per-pixel embeddings with CLIP text embeddings of class names. CLIPSeg \cite{luddecke2022clipseg} is
+closest to the present work: it keeps CLIP frozen and adds a small transformer decoder that is conditioned
+on the prompt through FiLM \cite{perez2018film}, trained on the PhraseCut dataset
+\cite{wu2020phrasecut}. It serves here as an external reference point.
+
+\subsection{Referring Image Segmentation}
+
+Referring segmentation \cite{hu2016segmentation} predicts the mask of the one object that a sentence
+describes, which may need attributes (\enquote{girl in pink}), relations or position
+(\enquote{man on far left}). The standard benchmarks RefCOCO and RefCOCO+ \cite{kazemzadeh2014referitgame,
+yu2016refcoco} are built on COCO images \cite{lin2014coco}. State-of-the-art models such as CRIS
+\cite{wang2022cris} and LAVT \cite{yang2022lavt} fine-tune large encoders with cross-modal attention
+on tens of thousands of images. This work deliberately targets a much smaller regime: a frozen
+encoder, a decoder of about one million parameters and fewer than one thousand training images.
+
+\subsection{Language-Conditioned Perception in 3D}
+
+In robotics, CLIPort \cite{shridhar2021cliport} combines CLIP semantics with spatial pathways for
+tabletop manipulation. OpenScene \cite{peng2023openscene}, ConceptFusion
+\cite{jatavallabhula2023conceptfusion} and LERF \cite{kerr2023lerf} attach CLIP features to 3D point
+clouds, fused maps or radiance fields, so that a scene can be queried with text. These systems
+build a full 3D representation first. Here, the simpler and cheaper route is taken: segmentation is
+performed in 2D and only the selected pixels are lifted with the pinhole model \cite{hartley2004mvg}, using
+Open3D \cite{zhou2018open3d}.
+
+% ---------------------------------------------------------------------------
+\section{Problem Formulation}
+\label{sec:problem}
+
+Given an RGB image $I \in [0,255]^{H\times W\times 3}$ and a referring sentence $t$, the goal is a
+binary mask $M \in \{0,1\}^{H\times W}$ of the object that $t$ describes. The model outputs a
+probability map $P(u,v) = p(\text{target} \mid I, t)$, which is thresholded at $0.5$. For a sample
+with ground truth $G$, the following metrics are computed
+\begin{equation}
+\mathrm{IoU} = \frac{|M \cap G|}{|M \cup G|}, \qquad
+\mathrm{Dice} = \frac{2\,|M \cap G|}{|M| + |G|},
+\label{eq:metrics}
+\end{equation}
+on a $224\times 224$ grid. The mean over sentences is reported (mIoU, mean Dice) and P@0.5, the share
+of sentences with $\mathrm{IoU} > 0.5$, which can be read as \enquote{the object was found}.
+
+If, in addition, a depth map $D$, the camera intrinsics $K$ and the camera pose $T_{wc}$ are known,
+the second goal is the set of 3D world points of the target, its centroid and its bounding box.
+
+% ---------------------------------------------------------------------------
+\section{Method}
+\label{sec:method}
+
+\begin{figure*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\footnotesize,
+  >={Stealth[length=2mm]},
+  box/.style={draw, rounded corners=2pt, align=center, minimum height=8mm, inner sep=3pt},
+  frozen/.style={box, fill=blue!8},
+  train/.style={box, fill=orange!18},
+  geo/.style={box, fill=green!12},
+  data/.style={align=center, inner sep=1pt},
+  node distance=4mm and 5mm]
+  \node[data] (img) {RGB image\\$224\times224$};
+  \node[frozen, right=of img] (vit) {CLIP ViT-B/16\\image encoder};
+  \node[train, right=9mm of vit] (proj) {LayerNorm + Linear\\per layer, sum\\$14^2\times128$};
+  \node[train, right=of proj] (dec) {conv $14^2$ \;$\to$\; up $28^2$ \;$\to$\; up $56^2$\\$\to$ $1\times1$ conv $\to$ $224^2$};
+  \node[data, right=of dec] (mask) {mask\\$P(u,v)$};
+  \node[data, below=7mm of img] (txt) {sentence $t$};
+  \node[frozen] (te) at (vit |- txt) {CLIP text\\encoder};
+  \node[train] (mlp) at (proj |- txt) {MLP\\$\to(\gamma,\beta)$};
+  \node[geo, right=7mm of mask] (bp) {back-projection\\$P_c = Z K^{-1}[u,v,1]^\top$};
+  \node[geo, below=5mm of bp] (tw) {world frame\\$P_w = T_{wc} P_c$};
+  \node[data, left=6mm of tw] (rgbd) {depth $D$,\\$K$, $T_{wc}$};
+  \node[data, below=4mm of tw] (out) {3D target:\\points, centroid, box};
+  \draw[->] (img) -- (vit);
+  \draw[->] (vit) -- node[above, font=\scriptsize, align=center]{layers\\3,6,9,12} (proj);
+  \draw[->] (proj) -- (dec);
+  \draw[->] (dec) -- (mask);
+  \draw[->] (txt) -- (te);
+  \draw[->] (te) -- node[above, font=\scriptsize]{512-d} (mlp);
+  \draw[->] (mlp) -| node[pos=0.25, above, font=\scriptsize]{FiLM: $(1+\gamma)\odot\Ffeat+\beta$} (dec);
+  \draw[->] (mask) -- (bp);
+  \draw[->] (bp) -- (tw);
+  \draw[->] (rgbd) -- (tw);
+  \draw[->] (rgbd.north) -- ($(bp.south west)!0.25!(bp.south east)$);
+  \draw[->] (tw) -- (out);
+\end{tikzpicture}}
+\caption{Overview. Blue: frozen CLIP encoders. Orange: the trainable decoder (1.05\,M parameters).
+Green: the geometric module, which needs a calibrated RGB-D frame.}
+\label{fig:pipeline}
+\end{figure*}
+
+\Cref{fig:pipeline} shows the full pipeline.
+
+\subsection{Frozen CLIP Features}
+
+The public \texttt{openai/clip-vit-base-patch16} model is used. An image resized to $224\times224$
+gives $14\times14$ patch tokens of dimension 768 in each of the 12 transformer layers. Early layers
+are more spatial and later ones more semantic, so the patch tokens of layers 3, 6, 9 and 12
+are kept (the class token is dropped). The sentence is encoded by the CLIP text encoder into a 512-d
+embedding $e_t$. Both encoders are frozen, so their outputs are computed once and cached, and a full
+training run takes 30--40\,s on a laptop GPU.
+
+\subsection{Text-Conditioned Decoder}
+
+Each of the four token maps $z_\ell$ is normalised and projected to $C = 128$ channels, and the
+projections are summed:
+\begin{equation}
+\Ffeat_0 = \sum_{\ell \in \{3,6,9,12\}} W_\ell \, \mathrm{LN}(z_\ell) \in \mathbb{R}^{14\times14\times C}.
+\end{equation}
+The text enters through FiLM \cite{perez2018film}: a small MLP maps $e_t$ to a per-channel scale
+$\gamma$ and shift $\beta$, which modulate the feature map
+\begin{equation}
+\film(\Ffeat \mid t) = \bigl(1 + \gamma(e_t)\bigr) \odot \Ffeat + \beta(e_t).
+\label{eq:film}
+\end{equation}
+The MLP is zero-initialised, so training starts from the identity. FiLM is applied at two stages,
+at $14\times14$ and after the first upsampling. The decoder then refines the features with
+$3\times3$ convolution blocks at $14^2$, $28^2$ and $56^2$, predicts one logit per pixel with a
+$1\times1$ convolution and upsamples bilinearly to $224\times224$.
+
+As controls, the same decoder \emph{without} text (M0, image-only) is used, as well as a variant that
+concatenates the broadcast text embedding to the features instead of FiLM (M1b, concat). Appending normalised $(x,y)$ coordinate channels \cite{liu2018coordconv}, which can help
+convolutional networks with positional words, was also tested.
+
+\subsection{Loss and Training}
+
+The decoder is trained with binary cross-entropy plus soft Dice \cite{milletari2016vnet}, which
+counteracts the imbalance between small objects and large backgrounds:
+\begin{equation}
+\mathcal{L} = \mathrm{BCE}(P, G) + \lambda \left(1 - \frac{2\sum P\,G + \epsilon}{\sum P + \sum G + \epsilon}\right),
+\quad \lambda = 1.
+\end{equation}
+Optimisation uses AdamW \cite{loshchilov2019adamw} (learning rate $3\cdot10^{-4}$, weight decay
+$0.01$), a one-cycle schedule \cite{smith2019onecycle}, batches of 32, at most 30 epochs, and early
+stopping on validation mIoU.
+
+\subsection{Language-Aware Flip Augmentation}
+
+Horizontal flipping is the standard augmentation for segmentation, but it changes the meaning of
+referring expressions: after a flip, \enquote{man on the left} is on the right. Therefore, the image
+and the mask are flipped, and the words \enquote{left} and \enquote{right} are swapped in the sentence
+before it is encoded. The swap affects 48\% of all sentences in the dataset, so a plain flip would produce
+wrong labels for almost half of the training data. Flipped CLIP features are cached in the same way
+as the originals.
+
+\subsection{Lifting the Mask to 3D}
+\label{sec:method-3d}
+
+With an aligned depth map $D$ (in millimetres) and intrinsics
+$K = \bigl[\begin{smallmatrix} f_x & 0 & c_x\\ 0 & f_y & c_y \\ 0 & 0 & 1\end{smallmatrix}\bigr]$,
+the pinhole model $\lambda[u,v,1]^\top = K P_c$ is inverted for every masked pixel:
+\begin{equation}
+Z = \frac{D(u,v)}{1000},\quad X = \frac{(u - c_x)\,Z}{f_x},\quad Y = \frac{(v - c_y)\,Z}{f_y}.
+\label{eq:backproject}
+\end{equation}
+Camera points are moved into the world frame with the rigid camera pose
+$T_{wc} = \bigl[\begin{smallmatrix} R & \mathbf{t} \\ \mathbf{0}^\top & 1\end{smallmatrix}\bigr]$:
+\begin{equation}
+P_w = R\,P_c + \mathbf{t}.
+\label{eq:world}
+\end{equation}
+Pixels without depth or beyond 4\,m are skipped. Before lifting, the mask is cleaned in 2D: connected
+components smaller than 10\% of the largest are removed, and the mask is eroded by 3 pixels, because
+at an object's silhouette the depth sensor often measures the background, which would create
+\enquote{flying} points between object and wall. The lifted points are downsampled to a 1\,cm voxel
+grid and filtered with a statistical outlier test \cite{rusu2008objectmaps}. The target is reported
+by its centroid and its axis-aligned bounding box.
+
+Open3D \cite{zhou2018open3d} is used for back-projection, transformation and rendering. Unit tests on
+synthetic depth with $f_x \neq f_y$ and an off-centre principal point check that it implements
+exactly \cref{eq:backproject,eq:world}, including Open3D's convention of storing the inverse pose
+(world to camera) as the \enquote{extrinsic} matrix.
+
+% ---------------------------------------------------------------------------
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Data}
+
+The data come from RefCOCO-M \cite{refcocom}, a re-annotation of RefCOCO \cite{yu2016refcoco} with refined,
+pixel-accurate masks: 1,190 COCO images, 2,080 object masks and 5,598 referring sentences. It is
+distributed as a single split, so it was partitioned \emph{by image} (seed 0) into
+train/val/test = 833/178/179 images (3,952/857/789 sentences). Splitting by image guarantees that no
+test image, and no object in it, is seen during training. About two thirds of the sentences
+contain spatial words (\enquote{left}, \enquote{right}, \enquote{behind}, \enquote{second}, \dots).
+
+The 3D experiments use the Redwood RGB-D sample shipped with Open3D \cite{choi2015redwood}:
+five $640\times480$ frames of a rendered living room with aligned depth, intrinsics
+($f_x = f_y = 525$, $c_x = 319.5$, $c_y = 239.5$) and a camera pose per frame.
+
+\subsection{Protocol}
+
+Every variant is trained with three seeds; the mean and standard deviation are reported. All design
+choices, including the final model, were made on the validation set. The test set was evaluated
+once, after tuning had ended. CLIPSeg (\texttt{CIDAS/clipseg-rd64-refined}) is evaluated with its
+own $352\times352$ input, its output is resized to the same $224\times224$ grid, and its threshold
+(0.25) is chosen on validation. Because CLIPSeg was trained on different data, it is a reference
+point, not a controlled baseline. Latency is measured at batch size 1 on an NVIDIA RTX 4060 Laptop GPU.
+
+% ---------------------------------------------------------------------------
+\section{Results}
+\label{sec:results}
+
+\begin{table}[t]
+\caption{Test results (789 sentences, 179 images), mean over 3 seeds}
+\label{tab:results}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lrlll@{}}
+\toprule
+Model & Params & mIoU & Dice & P@0.5 \\
+\midrule
+M0 image-only            & 0.66\,M & $0.281 \pm 0.002$ & 0.397 & 0.179 \\
+M1b concat               & 0.85\,M & $0.353 \pm 0.012$ & 0.456 & 0.341 \\
+M1 FiLM                  & 1.05\,M & $0.375 \pm 0.013$ & 0.478 & 0.375 \\
+\quad no coord.\ channels & 1.05\,M & $0.375 \pm 0.005$ & 0.478 & 0.381 \\
+\quad BCE only           & 1.05\,M & $0.332 \pm 0.009$ & 0.428 & 0.319 \\
+\midrule
+R1: + dropout, wd        & 1.05\,M & $0.392 \pm 0.013$ & 0.495 & 0.398 \\
+\textbf{R2: + flip (final)} & 1.05\,M & $\mathbf{0.393 \pm 0.013}$ & \textbf{0.498} & \textbf{0.400} \\
+R3: R1 + R2              & 1.05\,M & $0.403 \pm 0.012$ & 0.506 & 0.414 \\
+\midrule
+CLIPSeg \cite{luddecke2022clipseg} & 0 (151\,M) & $0.385$ & 0.492 & 0.371 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Text Conditioning and Fusion}
+
+\Cref{tab:results} summarises the test results. Text conditioning is the decisive ingredient: FiLM
+improves mIoU over the image-only decoder by $+0.094 \pm 0.012$, and P@0.5 more than doubles, from
+0.18 to 0.38. The image-only model can only learn \enquote{segment a salient object}, which is
+sometimes right by chance. FiLM beats concatenation by $+0.021 \pm 0.004$, in all three seeds,
+while concatenation uses 0.2\,M fewer parameters. Removing Dice from the loss costs $0.043$ mIoU.
+Coordinate channels bring no gain, which suggests that CLIP's patch tokens already encode position
+well enough; they are therefore omitted from the final model.
+
+\Cref{fig:language} shows the effect qualitatively: on the same image the image-only model returns
+the same mask for every sentence, whereas the FiLM model switches targets. On the 91 test images
+with at least two described objects, the final model segments \emph{both} sentences correctly
+(IoU $> 0.5$) in 19.8\% of cases; the image-only model never does.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth, trim=0 0 0 40, clip]{gallery_language.png}
+\caption{Same image, two sentences (test set). Columns 1 and 3: image-only decoder; columns 2 and 4:
+final FiLM model. Green outline: ground truth; red: prediction. The image-only model cannot change
+its answer when the sentence changes.}
+\label{fig:language}
+\end{figure*}
+
+\subsection{Overfitting and Regularisation}
+
+With fewer than a thousand training images the decoder overfits strongly: the FiLM model reaches
+0.76 mIoU on the training images but 0.41 on validation. On validation, dropout with stronger
+weight decay (R1) reduced the gap between training and validation mIoU from 0.35 to 0.32, and the language-aware flip
+(R2) reduced it to 0.28 while giving the best validation mIoU (0.432 vs.\ 0.413). R2 was
+therefore selected as the final model. On the test set R2 improves over the FiLM model by $+0.018$. R3,
+which combines both, is numerically higher on test (0.403), but the difference from R2 is within
+seed variation and it was not meaningfully better on validation (0.433 vs.\ 0.432), so the choice made
+on validation is kept.
+
+\subsection{Comparison with CLIPSeg}
+
+Overall, the final model and CLIPSeg are level (0.393 vs.\ 0.385; the difference is smaller than
+the seed variation). The breakdown by sentence type in \cref{fig:breakdown} shows that the two
+models are good at different things. The proposed decoder, trained on RefCOCO-style sentences, is much better
+on spatial references (0.386 vs.\ 0.307). CLIPSeg, trained on the larger PhraseCut dataset, is much
+better on sentences that name an object or its attributes without position (0.530 vs.\ 0.407). The
+proposed model is also faster: about 5.5\,ms per image and sentence end to end, of which 4.7\,ms is CLIP and
+0.8\,ms the decoder, compared with 7.7\,ms for CLIPSeg.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  ybar, bar width=12pt, width=\columnwidth, height=4.6cm,
+  ymin=0, ymax=0.6, ylabel={test mIoU}, ylabel style={font=\footnotesize},
+  symbolic x coords={M0 image-only, M1 FiLM, Final (R2), CLIPSeg},
+  xtick=data, x tick label style={font=\footnotesize},
+  y tick label style={font=\footnotesize, /pgf/number format/fixed},
+  enlarge x limits=0.16,
+  legend style={at={(0.02,0.98)}, anchor=north west, font=\footnotesize, draw=none, fill=none},
+  legend cell align=left,
+  nodes near coords, nodes near coords style={font=\tiny, /pgf/number format/fixed, /pgf/number format/precision=2},
+  ymajorgrids, grid style={gray!25}]
+\addplot[fill=blue!55, draw=blue!70!black] coordinates
+  {(M0 image-only,0.253) (M1 FiLM,0.375) (Final (R2),0.386) (CLIPSeg,0.307)};
+\addplot[fill=orange!60, draw=orange!70!black] coordinates
+  {(M0 image-only,0.333) (M1 FiLM,0.375) (Final (R2),0.407) (CLIPSeg,0.530)};
+\legend{spatial sentences (512), other sentences (277)}
+\end{axis}
+\end{tikzpicture}
+\caption{Test mIoU by sentence type. Spatial sentences contain words such as \enquote{left},
+\enquote{right} or \enquote{behind}.}
+\label{fig:breakdown}
+\end{figure}
+
+\subsection{Failure Cases}
+
+The hardest sentences are those that hinge on colour or clothing (\enquote{girl in pink},
+\enquote{man in white shirt}): 0.320 mIoU against 0.419 for the rest, which is consistent with
+CLIPSeg's advantage on attributes. Crowded images with four or more annotated objects are also
+difficult (0.233 mIoU), mostly because the model picks the right kind of object but the wrong
+instance. Finally, the decoder predicts at $56\times56$, so thin structures and exact boundaries are
+lost.
+
+\subsection{3D Localisation}
+
+\Cref{fig:redwood2d,fig:redwood3d} show the geometric module on the Redwood sequence for the
+sentence \enquote{white armchair}. The predicted mask is lifted from each of the five frames into the
+common world frame. Because the chair is static, its centroid should land at the same world point
+from every viewpoint; the measured spread is 3.0\,cm on average and 4.4\,cm at most (4.4\,cm /
+5.2\,cm without flip augmentation). The five scene clouds overlap without visible double contours,
+so the remaining spread is caused by the masks covering slightly different parts of the chair, not
+by pose errors.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.95\textwidth, trim=0 0 0 30, clip]{white-armchair_redwood_00_2d.png}
+\caption{\enquote{white armchair} on Redwood frame 0: RGB, measured depth, predicted probability
+map and thresholded mask. The mask mainly covers the seat; the thin metal frame is missed.}
+\label{fig:redwood2d}
+\end{figure*}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\columnwidth]{white-armchair_3d_crop.png}
+\caption{World-frame point cloud fused from five RGB-D frames. Red: target points; yellow: per-frame
+centroids; red box: fused bounding box; blue: camera frustums.}
+\label{fig:redwood3d}
+\end{figure}
+
+The 3D results also expose the limits of the 2D model. Redwood is a synthetic render and differs
+from COCO photographs, so the mask mainly covers the seat cushion and the bounding box
+underestimates the chair's height. Sentences about background regions (\enquote{the window},
+\enquote{the floor}) fail: RefCOCO only annotates discrete objects, so the model has learned that
+the answer is always an object and falls back to the most salient one.
+
+% ---------------------------------------------------------------------------
+\section{Limitations and Future Work}
+\label{sec:limitations}
+
+The main limitation is the amount of training data. RefCOCO-M contains refined masks for the
+RefCOCO \emph{evaluation} images, and 833 training images leave a gap of 0.28 between training and validation mIoU
+even with augmentation. Training on the original RefCOCO training split (about 17k images, disjoint
+from the images used here) is the natural next step. The reported numbers come from a custom split and are not comparable
+with published RefCOCO benchmarks. CLIP and CLIPSeg may also have seen COCO images during
+pre-training. On the geometric side, each frame only sees visible surfaces, the bounding box is
+axis-aligned rather than oriented, and the 3D output is a localisation, not a grasp or manipulation
+plan. Higher-resolution decoding, oriented boxes and fusion of the per-frame masks into one
+volumetric map are straightforward extensions.
+
+% ---------------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+
+A decoder with about one million parameters on frozen CLIP features can ground referring
+expressions: text conditioning through FiLM improves test mIoU from 0.281 to 0.393, matches the
+pretrained CLIPSeg model overall and clearly outperforms it on spatial references. A language-aware
+flip augmentation, which swaps \enquote{left} and \enquote{right}, is a cheap and effective
+regulariser for this task. Combined with the pinhole model and a calibrated RGB-D camera, the 2D
+masks become consistent 3D localisations within a few centimetres across viewpoints, a first step
+from \enquote{what the user said} to \enquote{where the robot should look}.
+
+\section*{Acknowledgment}
+
+The author thanks the creators of CLIP, CLIPSeg, RefCOCO-M and Open3D for making their models, data and
+software publicly available. Code, data split and all result tables are available at
+\url{https://github.com/Apsie09/Text-Guided-Segmentation-3D}.
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}
