@@ -37,7 +37,10 @@ world frame.
 | M1 | FiLM | 1.05 M | Text sets a per-channel scale and shift, at two decoder stages |
 | M1b | concat | 0.85 M | Text embedding broadcast and concatenated to the features |
 | **Final** | FiLM | 1.05 M | M1, no coordinate channels, **horizontal flip with left↔right swapped text** |
-| CLIPSeg | pretrained | 0 (151 M frozen) | [`CIDAS/clipseg-rd64-refined`](https://huggingface.co/CIDAS/clipseg-rd64-refined), external reference only |
+| CLIPSeg | FiLM (pretrained) | 1.13 M, trained by its authors on PhraseCut | [`CIDAS/clipseg-rd64-refined`](https://huggingface.co/CIDAS/clipseg-rd64-refined), external reference only |
+
+All rows share the same frozen CLIP ViT-B/16 (150 M parameters); only the decoder is trained,
+about 0.7% of the full model.
 
 Loss: BCE + soft Dice. AdamW (lr 3e-4, weight decay 0.01), one-cycle schedule, batch 32, ≤30 epochs.
 Training one model takes about 30–40 s on an RTX 4060 Laptop GPU.

@@ -7,6 +7,7 @@
 \usepackage{microtype}
 \usepackage{amsmath}
 \usepackage{graphicx}
+\usepackage{float}
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{xcolor}
@@ -21,6 +22,15 @@
 \usepackage[capitalise,nameinlink]{cleveref}
 \crefname{equation}{Eq.}{Eqs.}
 \Crefname{equation}{Eq.}{Eqs.}
+
+% Let more floats share a page with text.
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\dbltopfraction}{0.9}
+\renewcommand{\textfraction}{0.1}
+\renewcommand{\floatpagefraction}{0.8}
+\renewcommand{\dblfloatpagefraction}{0.8}
+\setcounter{topnumber}{3}
+\setcounter{dbltopnumber}{2}
 
 \graphicspath{{figures/}{../figures/}}
 \renewcommand{\IEEEkeywordsname}{Keywords}
@@ -45,9 +55,11 @@ asepopov@tu-sofia.bg}}
 A robot that is told \enquote{pick up the cup on the left} must first find the pixels and then the
 3D points that the sentence refers to. This paper examines how far a small trainable decoder on top
 of a \emph{frozen} CLIP encoder can go on this referring-segmentation problem. The predicted masks are
-lifted into a world-frame point cloud with a calibrated RGB-D camera. With about one million trainable parameters,
-text conditioning via FiLM raises test mIoU from 0.281 (image-only) to 0.393, on par with the
-pretrained CLIPSeg model (0.385). The two models have complementary strengths: the proposed decoder
+lifted into a world-frame point cloud with a calibrated RGB-D camera. Only the decoder is trained:
+1.05\,M parameters, 0.7\% of the 151\,M in the full model, while the 150\,M-parameter CLIP encoders
+stay frozen and their features are computed once. Trained on fewer than 4,000 sentences, text
+conditioning via FiLM raises test mIoU from 0.281 (image-only) to 0.393, on par with CLIPSeg (0.385),
+which uses the same frozen CLIP with a decoder of similar size trained on a far larger dataset. The two models have complementary strengths: the proposed decoder
 on spatial references, CLIPSeg on object names and attributes.
 \end{abstract}
 
@@ -69,14 +81,12 @@ the camera projection with measured depth \cite{hartley2004mvg}.
 Large vision-language models such as CLIP \cite{radford2021clip} have made the first question much
 more approachable: their image and text embeddings live in a shared space and transfer to many
 tasks without retraining. Fine-tuning them end to end, however, is expensive and easily overfits
-small datasets. This raises the question studied in this work:
-\begin{displayquote}
-Can a lightweight decoder, trained on frozen CLIP features from a small dataset, ground referring
-expressions well enough to localise the referred object in 3D?
-\end{displayquote}
+small datasets. This raises the question studied in this work: \emph{can a lightweight decoder,
+trained on frozen CLIP features from a small dataset, ground referring expressions well enough to
+localise the referred object in 3D?}
 
 The contributions of this work are:
-\begin{itemize}
+\begin{itemize}[\setlength{\IEEElabelindent}{0pt}]
 \item a 1.05\,M-parameter decoder that fuses multi-layer CLIP patch tokens with the sentence
   embedding through feature-wise linear modulation (FiLM) \cite{perez2018film};
 \item a controlled comparison, over three seeds and on a held-out test set, of image-only, FiLM and
@@ -180,7 +190,8 @@ $\gamma$ and shift $\beta$, which modulate the feature map
 \film(\Ffeat \mid t) = \bigl(1 + \gamma(e_t)\bigr) \odot \Ffeat + \beta(e_t).
 \label{eq:film}
 \end{equation}
-The MLP is zero-initialised, so training starts from the identity. FiLM is applied at two stages,
+The MLP is zero-initialised, so at the start of training $\gamma = \beta = 0$ and FiLM passes the
+features through unchanged. FiLM is applied at two stages,
 at $14\times14$ and after the first upsampling. The decoder then refines the features with
 $3\times3$ convolution blocks at $14^2$, $28^2$ and $56^2$, predicts one logit per pixel with a
 $1\times1$ convolution and upsamples bilinearly to $224\times224$.
@@ -268,8 +279,8 @@ point, not a controlled baseline. Latency is measured at batch size 1 on an NVID
 \section{Results}
 \label{sec:results}
 
-\begin{table}[t]
-\caption{Test results (789 sentences, 179 images), mean over 3 seeds}
+\begin{table}[!t]
+\caption{Test results (789 sentences, 179 images), mean over 3 seeds. Params: trainable parameters on top of the same frozen CLIP ViT-B/16 (150\,M)}
 \label{tab:results}
 \centering
 \footnotesize
@@ -288,8 +299,9 @@ R1: + dropout, wd        & 1.05\,M & $0.392 \pm 0.013$ & 0.495 & 0.398 \\
 \textbf{R2: + flip (final)} & 1.05\,M & $\mathbf{0.393 \pm 0.013}$ & \textbf{0.498} & \textbf{0.400} \\
 R3: R1 + R2              & 1.05\,M & $0.403 \pm 0.012$ & 0.506 & 0.414 \\
 \midrule
-CLIPSeg \cite{luddecke2022clipseg} & 0 (151\,M) & $0.385$ & 0.492 & 0.371 \\
+CLIPSeg$^{*}$ \cite{luddecke2022clipseg} & 1.13\,M & $0.385$ & 0.492 & 0.371 \\
 \bottomrule
+\multicolumn{5}{@{}l}{\scriptsize $^{*}$Trained by its authors on PhraseCut \cite{wu2020phrasecut}, used as released.}
 \end{tabular}
 \end{table}
 
@@ -310,7 +322,7 @@ with at least two described objects, the final model segments \emph{both} senten
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=0.92\textwidth, trim=0 0 0 40, clip]{gallery_language.png}
+\includegraphics[width=0.92\textwidth, trim=0 228 0 40, clip]{gallery_language.png}
 \caption{Same image, two sentences (test set). Columns 1 and 3: image-only decoder; columns 2 and 4:
 final FiLM model. Green outline: ground truth; red: prediction. The image-only model cannot change
 its answer when the sentence changes.}
@@ -319,8 +331,10 @@ its answer when the sentence changes.}
 
 \subsection{Overfitting and Regularisation}
 
-With fewer than a thousand training images the decoder overfits strongly: the FiLM model reaches
-0.76 mIoU on the training images but 0.41 on validation. On validation, dropout with stronger
+With fewer than a thousand training images the decoder overfits strongly. \Cref{fig:curves} shows
+the classic pattern: training loss falls steadily to about 0.2, while validation loss reaches its
+minimum around epochs 9--13 and then rises again, to about 0.96 at the last epoch. The FiLM model
+reaches 0.76 mIoU on the training images but 0.41 on validation (\cref{fig:gap}). On validation, dropout with stronger
 weight decay (R1) reduced the gap between training and validation mIoU from 0.35 to 0.32, and the language-aware flip
 (R2) reduced it to 0.28 while giving the best validation mIoU (0.432 vs.\ 0.413). R2 was
 therefore selected as the final model. On the test set R2 improves over the FiLM model by $+0.018$. R3,
@@ -328,17 +342,55 @@ which combines both, is numerically higher on test (0.403), but the difference f
 seed variation and it was not meaningfully better on validation (0.433 vs.\ 0.432), so the choice made
 on validation is kept.
 
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\columnwidth]{overfitting_curves.pdf}
+\caption{Learning curves of the FiLM model without (top) and with (bottom) flip augmentation, mean
+of 3 runs (band: range of the runs). Training loss keeps falling while validation loss reaches its
+minimum and rises again; validation mIoU stops improving after about 12 epochs. Dotted line: epoch
+with the best validation mIoU. Training values are running averages during each epoch.}
+\label{fig:curves}
+\end{figure}
+
+\begin{figure}[!htbp]
+\centering
+\begin{tikzpicture}
+\definecolor{trainC}{HTML}{2A78D6}\definecolor{valC}{HTML}{EB6834}
+\begin{axis}[
+  ybar, bar width=10pt, width=\columnwidth, height=4.4cm,
+  ymin=0, ymax=0.9, ylabel={mIoU}, ylabel style={font=\footnotesize},
+  symbolic x coords={base, r1, r2, r3}, xtick=data,
+  xticklabels={FiLM\\gap 0.35, R1\\gap 0.32, \textbf{R2 (final)}\\gap 0.28, R3\\gap 0.29},
+  x tick label style={font=\footnotesize, align=center},
+  y tick label style={font=\footnotesize, /pgf/number format/fixed},
+  enlarge x limits=0.16,
+  legend style={at={(0.5,1.02)}, anchor=south, font=\footnotesize, draw=none, fill=none, legend columns=2},
+  legend cell align=left,
+  nodes near coords, nodes near coords style={font=\tiny, /pgf/number format/fixed, /pgf/number format/precision=2},
+  ymajorgrids, grid style={gray!25}]
+\addplot[fill=trainC, draw=trainC!70!black] coordinates {(base,0.760) (r1,0.746) (r2,0.710) (r3,0.725)};
+\addplot[fill=valC, draw=valC!70!black] coordinates {(base,0.413) (r1,0.424) (r2,0.432) (r3,0.433)};
+\legend{training images, validation images}
+\end{axis}
+\end{tikzpicture}
+\caption{mIoU on the training and validation images for the regularisation variants (selected
+checkpoints, evaluation mode, mean of 3 runs). The gap below each pair measures overfitting.}
+\label{fig:gap}
+\end{figure}
+
 \subsection{Comparison with CLIPSeg}
 
 Overall, the final model and CLIPSeg are level (0.393 vs.\ 0.385; the difference is smaller than
-the seed variation). The breakdown by sentence type in \cref{fig:breakdown} shows that the two
+the seed variation). Both use the same frozen CLIP encoders and a decoder of similar size (1.05\,M
+vs.\ 1.13\,M parameters), so the comparison mainly reflects the training data: fewer than 4,000
+RefCOCO-M sentences here, against the much larger PhraseCut dataset for CLIPSeg. The breakdown by sentence type in \cref{fig:breakdown} shows that the two
 models are good at different things. The proposed decoder, trained on RefCOCO-style sentences, is much better
 on spatial references (0.386 vs.\ 0.307). CLIPSeg, trained on the larger PhraseCut dataset, is much
 better on sentences that name an object or its attributes without position (0.530 vs.\ 0.407). The
 proposed model is also faster: about 5.5\,ms per image and sentence end to end, of which 4.7\,ms is CLIP and
 0.8\,ms the decoder, compared with 7.7\,ms for CLIPSeg.
 
-\begin{figure}[t]
+\begin{figure}[!htbp]
 \centering
 \begin{tikzpicture}
 \begin{axis}[
@@ -364,6 +416,15 @@ proposed model is also faster: about 5.5\,ms per image and sentence end to end, 
 \label{fig:breakdown}
 \end{figure}
 
+% Wide figure defined here so that it lands at the top of the page with the 3D section.
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.95\textwidth, trim=0 0 0 30, clip]{white-armchair_redwood_00_2d.png}
+\caption{\enquote{white armchair} on Redwood frame 0: RGB, measured depth, predicted probability
+map and thresholded mask. The mask mainly covers the seat; the thin metal frame is missed.}
+\label{fig:redwood2d}
+\end{figure*}
+
 \subsection{Failure Cases}
 
 The hardest sentences are those that hinge on colour or clothing (\enquote{girl in pink},
@@ -383,15 +444,7 @@ from every viewpoint; the measured spread is 3.0\,cm on average and 4.4\,cm at m
 so the remaining spread is caused by the masks covering slightly different parts of the chair, not
 by pose errors.
 
-\begin{figure*}[t]
-\centering
-\includegraphics[width=0.95\textwidth, trim=0 0 0 30, clip]{white-armchair_redwood_00_2d.png}
-\caption{\enquote{white armchair} on Redwood frame 0: RGB, measured depth, predicted probability
-map and thresholded mask. The mask mainly covers the seat; the thin metal frame is missed.}
-\label{fig:redwood2d}
-\end{figure*}
-
-\begin{figure}[t]
+\begin{figure}[!htbp]
 \centering
 \includegraphics[width=0.85\columnwidth]{white-armchair_3d_crop.png}
 \caption{World-frame point cloud fused from five RGB-D frames. Red: target points; yellow: per-frame
@@ -431,10 +484,9 @@ regulariser for this task. Combined with the pinhole model and a calibrated RGB-
 masks become consistent 3D localisations within a few centimetres across viewpoints, a first step
 from \enquote{what the user said} to \enquote{where the robot should look}.
 
-\section*{Acknowledgment}
+\section*{Code Availability}
 
-The author thanks the creators of CLIP, CLIPSeg, RefCOCO-M and Open3D for making their models, data and
-software publicly available. Code, data split and all result tables are available at
+Code, data split and scripts for all results:
 \url{https://github.com/Apsie09/Text-Guided-Segmentation-3D}.
 
 \bibliographystyle{IEEEtran}
